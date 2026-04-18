@@ -77,10 +77,10 @@ GO
 -- -----------------------------------------------------------------------------
 CREATE TABLE vendors (
     vendor_id   INT     IDENTITY(1,1)    NOT NULL,
-    venodr_name NVARCHAR(150)            NOT NULL,
+    vendor_name NVARCHAR(150)            NOT NULL,
     vendor_code NVARCHAR(20)             NOT NULL,
     vendor_type NVARCHAR(50)             NOT NULL,
-    contract_vehicle    NVARCHAR(100)    NOT NULL,
+    contract_vehicle    NVARCHAR(100)     NULL,
     is_active   BIT                      NOT NULL DEFAULT 1,
     CONSTRAINT PK_vendors PRIMARY KEY (vendor_id),
     CONSTRAINT UQ_vendors_code UNIQUE (vendor_code),
@@ -159,7 +159,7 @@ CREATE TABLE labor_categories(
     CONSTRAINT FK_labor_categories_domain FOREIGN KEY (domain_id)
         REFERENCES skill_domains(domain_id),
     CONSTRAINT CK_labor_categories_type CHECK(
-        labor_type IN('Engineering', 'Analysis', 'Management', 'Administrative', 'Techical')
+        labor_type IN('Engineering', 'Analysis', 'Management', 'Administrative', 'Technical')
     )
 );
 GO
@@ -285,7 +285,7 @@ CREATE TABLE labor_rates(
     CONSTRAINT FK_labor_rates_vendor FOREIGN KEY(vendor_id)
         REFERENCES vendors(vendor_id),
     CONSTRAINT CK_labor_rates_type CHECK(
-        rate_type IN('Base', 'Escelated', 'Calling', 'Proposed', 'Negotiated')
+        rate_type IN('Base', 'Escalated', 'Ceiling', 'Proposed', 'Negotiated')
     ),
     CONSTRAINT CK_labor_rates_hourly CHECK(hourly_rate>0),
     CONSTRAINT CK_labor_rates_overtime CHECK(
@@ -305,7 +305,7 @@ GO
 -- burn-rate analysis, and labor cost reporting.
 -- -----------------------------------------------------------------------------
 CREATE TABLE timesheets(
-    timesheet_id INT                NOT NULL,
+    timesheet_id INT        IDENTITY(1,1)   NOT NULL,
     employee_id INT                  NOT NULL,
     program_id  INT                 NOT NULL,
     cost_center_id INT              NOT NULL,
@@ -347,4 +347,237 @@ CREATE TABLE timesheets(
         approved_date IS NULL OR submitted_date IS NOT NULL
     )
 );
+GO
+
+-- =============================================================================
+-- INDEXES
+-- Strategic indexes on foreign key columns and common analytical filter
+-- columns. Each index includes a comment explaining its purpose.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- Foreign key indexes
+-- SQL Server does not automatically index FK columns. Adding these prevents
+-- full table scans on JOINs across the schema's many analytical queries.
+-- ---------------------------------------------------------------------------
+
+-- labor_categories → skill_domains
+CREATE INDEX IX_labor_categories_domain_id
+    ON labor_categories(domain_id);
+GO
+
+-- organizations → organizations (self-reference)
+CREATE INDEX IX_organizations_parent_org_id
+    ON organizations(parent_org_id);
+GO
+
+-- cost_centers → programs
+CREATE INDEX IX_cost_centers_program_id
+    ON cost_centers(program_id);
+GO
+
+-- employees → all five parents
+CREATE INDEX IX_employees_lcat_id
+    ON employees(lcat_id);
+GO
+
+CREATE INDEX IX_employees_org_id
+    ON employees(org_id);
+GO
+
+CREATE INDEX IX_employees_vendor_id
+    ON employees(vendor_id);
+GO
+
+CREATE INDEX IX_employees_location_id
+    ON employees(location_id);
+GO
+
+CREATE INDEX IX_employees_cost_center_id
+    ON employees(cost_center_id);
+GO
+
+-- program_assignments → employees, programs
+CREATE INDEX IX_assignments_employee_id
+    ON program_assignments(employee_id);
+GO
+
+CREATE INDEX IX_assignments_program_id
+    ON program_assignments(program_id);
+GO
+
+-- labor_rates → labor_categories, vendors
+CREATE INDEX IX_labor_rates_lcat_id
+    ON labor_rates(lcat_id);
+GO
+
+CREATE INDEX IX_labor_rates_vendor_id
+    ON labor_rates(vendor_id);
+GO
+
+-- timesheets → employees, programs, cost_centers
+CREATE INDEX IX_timesheets_employee_id
+    ON timesheets(employee_id);
+GO
+
+CREATE INDEX IX_timesheets_program_id
+    ON timesheets(program_id);
+GO
+
+CREATE INDEX IX_timesheets_cost_center_id
+    ON timesheets(cost_center_id);
+GO
+
+-- ---------------------------------------------------------------------------
+-- Analytical filter indexes
+-- Columns frequently used in WHERE clauses across reporting queries.
+-- ---------------------------------------------------------------------------
+
+-- Active employee filter (very common across utilization queries)
+CREATE INDEX IX_employees_is_active
+    ON employees(is_active);
+GO
+
+-- Billable vs. non-billable filter for utilization analysis
+CREATE INDEX IX_employees_is_billable
+    ON employees(is_billable);
+GO
+
+-- Fiscal period filters on timesheets (most common analytical filter)
+CREATE INDEX IX_timesheets_fiscal_year_month
+    ON timesheets(fiscal_year, fiscal_month);
+GO
+
+-- Labor rate lookup by effective date (for historical rate queries)
+CREATE INDEX IX_labor_rates_effective_date
+    ON labor_rates(effective_date);
+GO
+
+-- Program phase filter (active vs. completed program reporting)
+CREATE INDEX IX_programs_phase
+    ON programs(program_phase);
+GO
+
+-- =============================================================================
+-- VIEWS
+-- Analytical views representing common reporting outputs. Each view answers
+-- a specific business question. Views are used to simplify queries for
+-- end users and to enforce consistent analytical logic across reports.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- v_active_billable_workforce
+-- All active, billable employees with their core assignments denormalized.
+-- Most common starting point for utilization and staffing queries.
+-- ---------------------------------------------------------------------------
+
+CREATE VIEW v_active_billable_workforce AS
+SELECT
+    e.employee_id,
+    e.first_name + ' '+ e.last_name AS full_name,
+    e.hire_date,
+    e.clearance_level,
+    e.labor_grade,
+    lc.lcat_name,
+    sd.domain_name AS skill_domain,
+    o.org_name,
+    v.vendor_name,
+    l.location_name,
+    l.city,
+    l.state_code,
+    cc.cost_center_code,
+    cc.cost_center_name,
+    p.program_name
+FROM employees e
+    INNER JOIN labor_categories lc ON e.lcat_id = lc.lcat_id
+    INNER JOIN skill_domains sd ON lc.domain_id = sd.domain_id
+    INNER JOIN organizations o ON e.org_id = o.org_id
+    INNER JOIN vendors v ON e.vendor_id = v.vendor_id
+    INNER JOIN locations l ON e.location_id = l.location_id
+    INNER JOIN cost_centers cc ON e.cost_center_id = cc.cost_center_id
+    INNER JOIN programs p ON cc.program_id = p.program_id
+WHERE e.is_active = 1
+    AND e.is_billable = 1;
+GO
+
+-- ---------------------------------------------------------------------------
+-- v_program_burn_rate
+-- Labor cost burn-rate per program per fiscal period. Calculated as total
+-- billable hours times the applied hourly rate. Supports burn-rate vs.
+-- plan analysis and program financial health reporting.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_program_burn_rate AS
+SELECT
+    p.program_id,
+    p.program_name,
+    p.program_code,
+    p.contract_type,
+    t.fiscal_year,
+    t.fiscal_month,
+    SUM(t.billable_hours) AS total_billable_hours,
+    SUM(t.regular_hours + t.overtime_hours) AS total_hours,
+    SUM(t.billable_hours * t.hourly_rate) AS total_labor_cost,
+    SUM(t.overtime_hours * ISNULL(t.overtime_rate,0)) AS total_overtime_cost,
+    COUNT(DISTINCT t.employee_id) AS unique_employees
+FROM timesheets t
+    INNER JOIN programs P ON t.program_id = p.program_id
+GROUP BY 
+    p.program_id,
+    p.program_name,
+    p.program_code,
+    p.contract_type,
+    t.fiscal_year,
+    t.fiscal_month;
+GO
+
+-- ---------------------------------------------------------------------------
+-- v_vendor_rate_comparison
+-- Current (non-expired) hourly rate comparison across vendors for the same
+-- labor category. Enables side-by-side vendor pricing analysis for sourcing
+-- decisions and rate reasonableness assessments.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_vendor_rate_comparison AS
+SELECT
+    lc.lcat_id,
+    lc.lcat_name,
+    sd.domain_name,
+    v.vendor_id,
+    v.vendor_name,
+    lr.rate_type,
+    lr.effective_date,
+    lr.expiration_date,
+    lr.hourly_rate,
+    lr.overtime_rate
+FROM labor_rates lr
+    INNER JOIN labor_categories lc ON lr.lcat_id = lc.lcat_id
+    INNER JOIN skill_domains sd ON lc.domain_id = sd.domain_id
+    INNER JOIN vendors v ON lr.vendor_id = v.vendor_id
+WHERE (lr.expiration_date IS NULL OR lr.expiration_date >= CAST(GETDATE() AS DATE))
+    AND v.is_active = 1;
+GO
+
+-- ---------------------------------------------------------------------------
+-- v_skill_domain_coverage
+-- Headcount of active, billable workforce by skill domain. Used to identify
+-- workforce gaps and inform hiring or contracting priorities.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_skill_domain_coverage AS
+SELECT
+    sd.domain_id,
+    sd.domain_name,
+    sd.domain_type,
+    COUNT(DISTINCT e.employee_id) AS active_headcount,
+    COUNT(DISTINCT CASE WHEN e.clearance_level IN('TS', 'TS/SCI') THEN e.employee_id END
+                    ) AS ts_cleared_headcount,
+    COUNT(DISTINCT e.vendor_id) AS vendor_count,
+    COUNT(DISTINCT e.org_id) AS org_count
+FROM skill_domains sd
+    LEFT JOIN labor_categories lc ON sd.domain_id = lc.domain_id
+    LEFT JOIN employees e ON lc.lcat_id = e.lcat_id 
+        AND e.is_active = 1
+        AND e.is_billable = 1
+GROUP BY 
+    sd.domain_id,
+    sd.domain_name,
+    sd.domain_type;
 GO
