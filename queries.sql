@@ -149,11 +149,11 @@ WHERE p.program_name = 'Charizard'
 SELECT
     clearance_level,
     COUNT(employee_id) AS number_of_employees,
-    CAST(COUNT(employee_id) AS DECIMAL(5,2) * 100 / (
-                            SELECT COUNT(employee_id) 
-                            FROM employees 
-                            WHERE is_active = 1
-                          ) AS percent_of_employees
+    CAST(COUNT(employee_id) AS DECIMAL(5,2)) * 100 / (
+                        SELECT COUNT(employee_id) 
+                        FROM employees 
+                        WHERE is_active = 1
+                      ) AS percent_of_employees
 FROM employees
 WHERE is_active = 1
 GROUP BY clearance_level
@@ -284,7 +284,7 @@ ORDER BY AVG(t.billable_hours) DESC
 -- Identifies employees on the payroll who have never been assigned to any
 -- program. These may be overhead-only staff, new hires pending assignment,
 -- or potential staffing gaps. Used by the HR lead for workforce alignment.
--- Cencepts Used: correlated subquery or NOT EXISTS
+-- Concepts Used: correlated subquery or NOT EXISTS
 -- ------------------------------------------------------------------------------
 SELECT
     e.first_name + ' ' + e.last_name AS full_name,
