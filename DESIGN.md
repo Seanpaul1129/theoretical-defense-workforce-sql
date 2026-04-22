@@ -2,7 +2,7 @@
 
 By Seanpaul Coffey
 
-Video overview: [YOUR YOUTUBE URL HERE]
+Video overview: https://youtu.be/ohn0f9UUghE
 
 ## Scope
 
