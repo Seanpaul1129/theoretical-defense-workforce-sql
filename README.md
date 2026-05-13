@@ -10,10 +10,10 @@ and program staffing decisions.
 
 ## Status
 
-✅ Schema complete — 11 tables, 20 indexes, 4 analytical views  
-✅ Seed data complete — all 11 tables populated with synthetic data  
-✅ Queries complete — 12 analytical SELECTs, 4 INSERTs, 3 UPDATEs, 2 DELETEs  
-✅ Design documentation complete  
+- Schema complete — 11 tables, 20 indexes, 4 analytical views  
+- Seed data complete — all 11 tables populated with synthetic data  
+- Queries complete — 12 analytical SELECTs, 4 INSERTs, 3 UPDATEs, 2 DELETEs  
+- Design documentation complete  
 
 ## Tech Stack
 
